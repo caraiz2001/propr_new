@@ -15,7 +15,8 @@ Assumptions:
 Method:
 1) First streaming pass:
    - Count how many times each gene appears. This gives exact per-gene counts.
-   - Accumulate exact weighted connectivity: sum of (1 - theta) for rows with fdr < 0.05, added to both genes.
+   - Accumulate exact weighted connectivity: sum of (1 - theta) for rows with fdr < 0.05, 
+     added to both genes.
 2) Allocate one big memory-mapped array on disk whose length is the sum of all per-gene counts
    (which should equal two times the number of unordered pairs).
    Build per-gene offsets by prefix sums of counts.
@@ -24,35 +25,39 @@ Method:
    - Maintain a per-gene write cursor so appends are O(1).
 4) After the second pass:
    - For each gene, read its contiguous slice, compute exact mean and exact median.
-   - Save a compressed comma-separated output with gene_index, pair_count, theta_mean, theta_median, weighted_connectivity.
+   - Save a compressed comma-separated output with:
+     gene_index, pair_count, theta_mean, theta_median, weighted_connectivity.
 
-This is exact and uses bounded main memory. Disk usage is dominated by the memory-mapped theta store
-(~ total_pairs*2 * 8 bytes).
+This is exact and uses bounded main memory. Disk usage is dominated by the memory-mapped theta 
+store (~ total_pairs*2 * 8 bytes).
 """
 
 # ----- Imports -----
-import argparse
 import os
+import sys
 import numpy as np
 import pandas as pd
-import sys
+
 
 
 # ----- Paths -----
-TARGET_GENE = "SAFB"
-# TARGET_GENE = os.getenv("TARGET_GENE")
-# if not TARGET_GENE:
-#     print("TARGET_GENE environment variable not set")
-#     sys.exit(1)
-#INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
-INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/{TARGET_GENE}_gpu_results.csv.gz"  # update this
-OUTPUT_GENEWISE_PATH = f"/users/cn/caraiz/propr_new/results/propd_single/genewise_metrics/pert_{TARGET_GENE}_genewise_metrics.csv"       # update this
-TMP_MEMMAP_PATH = "/users/cn/caraiz/propr_new/results/tmp/theta_by_gene.float64" # folder must exist
-ALL_GENE_NAMES_PATH = "/users/cn/caraiz/propr_new/data/all_gene_names_18080.txt"
+#TARGET_GENE = "SAFB"
+TARGET_GENE = os.getenv("TARGET_GENE")
+if not TARGET_GENE:
+    print("TARGET_GENE environment variable not set")
+    sys.exit(1)
 
+PARENT_FOLDER = "/users/cn/caraiz/propr_new/"
+#INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
+INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/{TARGET_GENE}_gpu_results.csv.gz"  # update this
+OUTPUT_GENEWISE_PATH = f"{PARENT_FOLDER}results/propd_single/genewise_metrics/pert_{TARGET_GENE}_genewise_metrics.csv"
+TMP_MEMMAP_PATH = f"{PARENT_FOLDER}results/tmp/theta_by_gene.float64" # folder must exist
+ALL_GENE_NAMES_PATH = f"{PARENT_FOLDER}data/all_gene_names_18080.txt"
+
+# ------ Parameters -----
 NUMBER_OF_GENES = 18080
 CHUNK_SIZE_ROWS = 5_000_000  # tune to your server
-PER_GENE_PAIR_COUNT = NUMBER_OF_GENES - 1  
+PER_GENE_PAIR_COUNT = NUMBER_OF_GENES - 1
 
 FDR_SIGNIFICANCE_THRESHOLD = 0.05
 
@@ -89,6 +94,10 @@ def first_pass_connectivity_only():
         engine="c",  # fastest
     )
 
+    # If the file is not found or cannot be read, an exception will be raised here
+    if reader is None:
+        raise FileNotFoundError(f"Could not open input file: {INPUT_PAIRWISE_PATH}")
+
     for chunk in reader:
         partner = chunk["Partner"].to_numpy(copy=False) - 1
         pair = chunk["Pair"].to_numpy(copy=False) - 1
@@ -102,12 +111,12 @@ def first_pass_connectivity_only():
         # Weighted connectivity: sum over significant connections of (1 - theta) to both genes
         sig = fdr < FDR_SIGNIFICANCE_THRESHOLD  # creates a boolean mask for significant pairs.
         if np.any(sig):
-            w = (1.0 - theta[sig])
+            w = 1.0 - theta[sig] # Subset only significant pairs
             np.add.at(per_gene_weighted_connectivity, partner[sig], w)
             np.add.at(per_gene_weighted_connectivity, pair[sig], w)
 
         print(f"Weighted connectivity pass: processed chunk with {len(chunk)} rows", flush=True)
-    print("First pass complete")
+    print("First pass complete", flush=True)
 
     # Per-gene counts should all equal PER_GENE_PAIR_COUNT
     if not np.all(per_gene_count == PER_GENE_PAIR_COUNT):
@@ -123,7 +132,8 @@ def prepare_memmap_and_offsets():
     """
     # Each gene owns a fixed length slice of length PER_GENE_PAIR_COUNT
     # Offsets are a simple arithmetic progression
-    slice_start = np.arange(NUMBER_OF_GENES, dtype=np.int64) * PER_GENE_PAIR_COUNT # array 18080 x 18079
+    # Slice start is a 1D vector of length 18080. It contains the starting index in the memmap for each gene.
+    slice_start = np.arange(NUMBER_OF_GENES, dtype=np.int64) * PER_GENE_PAIR_COUNT
     total_values = int(NUMBER_OF_GENES) * int(PER_GENE_PAIR_COUNT)
 
     theta_mem = np.memmap(TMP_MEMMAP_PATH, dtype=np.float64, mode="w+", shape=(total_values,))
@@ -151,14 +161,17 @@ def second_pass_fill(theta_mem, next_write_pos):
         pair = chunk["Pair"].to_numpy(copy=False) - 1
         theta = chunk["theta"].to_numpy(copy=False)
 
-        for genes in (partner, pair):
+        for genes in (partner, pair): # Do the same for partner and then for pair
+            # Sorting gives the order of indices that would sort it:
             order = np.argsort(genes, kind="mergesort")
-            genes_sorted = genes[order]
-            thetas_sorted = theta[order]
+            genes_sorted = genes[order] # this is now the gene indexes sorted
+            thetas_sorted = theta[order] # thetas values in the same order as genes_sorted
 
             if genes_sorted.size == 0:
                 continue
-
+            
+            # Find boundaries where gene index changes
+            # [0, 0, 0, 1, 1, 2] -> boundaries at [3, 5]
             boundaries = np.flatnonzero(np.diff(genes_sorted)) + 1
             starts = np.concatenate(([0], boundaries))
             stops  = np.concatenate((boundaries, [genes_sorted.size]))
@@ -175,6 +188,10 @@ def second_pass_fill(theta_mem, next_write_pos):
 
 # --- new helper: compute actual counts and validate against expectation ---
 def compute_actual_counts(next_write_pos, slice_start):
+    """
+    Compute actual per-gene counts from write cursors after second pass.
+    Warn if any gene deviates from expected fixed count.
+    """
     actual_counts = (next_write_pos - slice_start).astype(np.int64, copy=False)
 
     # Optional: warn if anything deviates from the expected fixed count
@@ -193,6 +210,9 @@ def compute_actual_counts(next_write_pos, slice_start):
 # Finalize exact statistics
 # -------------------------
 def finalize_stats(weighted_connectivity, slice_start):
+    """
+    Finalize exact statistics
+    """
     theta_mem = np.memmap(TMP_MEMMAP_PATH, dtype=np.float64, mode="r")
 
     # Creates vectors to store the results
@@ -233,11 +253,10 @@ def finalize_stats(weighted_connectivity, slice_start):
 def finalize_stats_robust(weighted_connectivity, slice_start, actual_counts):
     theta_mem = np.memmap(TMP_MEMMAP_PATH, dtype=np.float64, mode="r")
 
-    N = NUMBER_OF_GENES
-    theta_mean   = np.full(N, np.nan, dtype=np.float64)
-    theta_median = np.full(N, np.nan, dtype=np.float64)
+    theta_mean   = np.full(NUMBER_OF_GENES, np.nan, dtype=np.float64)
+    theta_median = np.full(NUMBER_OF_GENES, np.nan, dtype=np.float64)
 
-    for g in range(N):
+    for g in range(NUMBER_OF_GENES):
         cnt = int(actual_counts[g])
         if cnt <= 0:
             continue
@@ -288,35 +307,13 @@ def finalize_stats_robust(weighted_connectivity, slice_start, actual_counts):
 # Main
 # -------------------------
 def main():
-    # os.makedirs(os.path.dirname(OUTPUT_GENEWISE_PATH), exist_ok=True)
-    # os.makedirs(os.path.dirname(TMP_MEMMAP_PATH), exist_ok=True)
-
-    # # First pass: connectivity only
-    # weighted_connectivity = first_pass_connectivity_only()
-    # print("Computed weighted connectivity for all genes")
-
-    # # Prepare disk layout
-    # theta_mem, slice_start, next_write_pos, total_values = prepare_memmap_and_offsets()
-    # print(f"Prepared memory map for {total_values} theta values at {TMP_MEMMAP_PATH}")
-
-    # # Second pass: fill per gene slices with exact theta values
-    # second_pass_fill(theta_mem, next_write_pos)
-
-    # # Optional integrity check. Comment out if not needed.
-    # # Each cursor should equal slice_start[g] + PER_GENE_PAIR_COUNT
-    # if not np.all(next_write_pos == slice_start + PER_GENE_PAIR_COUNT):
-    #     bad = np.where(next_write_pos != slice_start + PER_GENE_PAIR_COUNT)[0]
-    #     raise RuntimeError(f"Write count mismatch for {bad.size} genes")
-
-    # # Finalize exact mean and median and write result
-    # result = finalize_stats(weighted_connectivity, slice_start)
 
     os.makedirs(os.path.dirname(OUTPUT_GENEWISE_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(TMP_MEMMAP_PATH), exist_ok=True)
 
     # 1) First pass: connectivity only
     weighted_connectivity = first_pass_connectivity_only()
-    print("Computed weighted connectivity for all genes")
+    print("Computed weighted connectivity for all genes", flush=True)
     #print(f"shape of weighted_connectivity: {weighted_connectivity.shape}")
 
     # 2) Prepare fixed layout
@@ -325,9 +322,11 @@ def main():
 
     # 3) Second pass: fill and get final write cursors
     next_write_pos = second_pass_fill(theta_mem, next_write_pos)
+    print("Filled memory map with theta values for all genes", flush=True)
 
     # 4) Derive actual per-gene counts from cursors (robust to any missing/extra rows)
     actual_counts = compute_actual_counts(next_write_pos, slice_start)
+    print("Computed actual per-gene pair counts", flush=True)
 
     # 5) Finalize exact stats and write
     result = finalize_stats_robust(weighted_connectivity, slice_start, actual_counts)

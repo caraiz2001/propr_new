@@ -27,8 +27,8 @@ PROPD method can be used to identify gene pairs that are at different proportion
 │-- scripts/               # 
 │-- exploratory_analysis/  # Exploratory data analysis scripts & plots
 │-- results/               # Results of the 
-│   │-- propd_single/  # Align promoter or protein sequences
-│   │-- propd_pairwise/ # Transform expression data using several methods 
+│   │-- propd_single/  # 
+│   │-- propd_pairwise/ #  
 |   |-- propd_benchmark/ #
 │-- README.rd              # Project documentation
 ```
