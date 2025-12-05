@@ -15,26 +15,32 @@ based on the pairs that each gene is involved in.
 # ----------------------------
 # Import libraries
 # ----------------------------
-import argparse
 import csv
 import math
 import os
+import gzip
 import subprocess
 import sys
-import tempfile
-from collections import defaultdict
+#import tempfile
+#from collections import defaultdict
 from pathlib import Path
 import numpy as np
-import gzip
+
 
 # ----------------------------
 # PATHS
 # ----------------------------
-TARGET_GENE = "MED12" # for testing only
-INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/{TARGET_GENE}_gpu_results.csv.gz"
-OUTPUT_GSEA_PATH = f"/users/cn/caraiz/propr_new/results/{TARGET_GENE}_gsea_results.csv"
-OUTPUT_SORTED_PATH = f"/users/cn/caraiz/propr_new/results/tmp/{TARGET_GENE}_sorted.csv"
-TMP_DIR = "/users/cn/caraiz/propr_new/results/tmp/"
+#TARGET_GENE = "KLF10" # for testing only
+TARGET_GENE = os.getenv("TARGET_GENE")
+if not TARGET_GENE:
+    print("TARGET_GENE environment variable not set")
+    sys.exit(1)
+
+PARENT_DIR = "/users/cn/caraiz/propr_new/"
+INPUT_PAIRWISE_PATH = f"{PARENT_DIR}results/{TARGET_GENE}_gpu_results.csv.gz"
+OUTPUT_GSEA_PATH = f"{PARENT_DIR}results/gsea_pair2gene/{TARGET_GENE}_gsea_results.csv"
+OUTPUT_SORTED_PATH = f"{PARENT_DIR}results/tmp/{TARGET_GENE}_sorted.csv"
+TMP_DIR = f"{PARENT_DIR}results/tmp/"
 os.makedirs(TMP_DIR, exist_ok=True)
 
 
@@ -68,10 +74,10 @@ def sort_csv_by_score(input_csv: Path, output_sorted_csv: Path):
     # Sort the file directly, skipping the header (first line) using process substitution
     # This avoids writing a new file for the body
     sort_key = "-k3,3g"
-    sort_cmd = f"(zcat {input_csv} | sort {sort_flag} {sort_key}"
+    sort_cmd = f"zcat {input_csv} | sort {sort_flag} {sort_key}"
 
     # Write the sorted file
-    with open(OUTPUT_SORTED_PATH, "wb") as out:
+    with open(output_sorted_csv, "wb") as out:
         subprocess.run(sort_cmd, shell=True, stdout=out, check=True)
 
     # # Reattach header (extract header using zcat and head)
@@ -100,13 +106,13 @@ def compute_es_stream(sorted_csv: Path,
     if N == (G * (G - 1)) / 2:
         print(f"Input file looks correct: {N} pairs for {G} genes.")
     else:
-        raise RuntimeError(f"Input file has {N} pairs, but expected {G * (G - 1) / 2} for {G} genes.")
+        raise RuntimeError(f"There are {N} pairs, but expected {G * (G - 1) / 2} for {G} genes.")
 
     # Precompute increments for misses and hits.
     # As the gene set size is constant, the miss is constant too
     miss_inc = 1.0 / (N - K) # Pmiss = 1 / (total pairs - pairs with gene g) = 1 / [(G*G - G) - (G-1)]
     hit_const = 1.0 / K # Phit = 1 / (pairs with gene g) = 1 / (G-1)
-    
+
     # States
     last_idx = np.zeros(G, dtype=np.int64)  # last position seen; start at 0
     cur = np.zeros(G, dtype=np.float64) # current running sum
@@ -181,10 +187,11 @@ def prepass_counts(input_csv: Path):
     N = 0
 
     # Detect delimiter from header
-    with open(input_csv, newline="") as f:
+    open_func = gzip.open if str(input_csv).endswith(".gz") else open
+    with open_func(input_csv, "rt", newline="") as f:
         header = f.readline()
-        #delimiter = "\t" if "\t" in header else ","
-        delimiter = ","  # assume comma for simplicity
+        delimiter = "\t" if "\t" in header else ","
+        #delimiter = ","  # assume comma for simplicity
         f.seek(0)
         rdr = csv.DictReader(f, delimiter=delimiter)
         for row in rdr:
@@ -201,9 +208,9 @@ def prepass_counts(input_csv: Path):
     gene_id = {g: i for i, g in enumerate(gene_ids)}
     # id_to_gene = gene_ids  # list of integer gene indexes
     G = len(gene_ids)
-    
+
     if N != (G * (G - 1)) / 2:
-        raise RuntimeError(f"Input has {N} pairs, but expected {G * (G - 1) / 2} for {G} genes.")
+        raise RuntimeError(f"There are {N} pairs, but expected {G * (G - 1) / 2} for {G} genes.")
 
     return gene_id, N
 
@@ -256,6 +263,9 @@ def bh_fdr(pvals: np.ndarray) -> np.ndarray:
     return out
 
 def main():
+    """
+    Main function to run the GSEA-like analysis on gene pairs.
+    """
     # 1) Pre-pass on unsorted file (fast, streaming)
     print("Pre-pass: counting per-gene set sizes...", file=sys.stderr)
     gene_id, N = prepass_counts(INPUT_PAIRWISE_PATH)
