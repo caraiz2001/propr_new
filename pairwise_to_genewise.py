@@ -41,17 +41,28 @@ import pandas as pd
 
 
 # ----- Paths -----
-#TARGET_GENE = "SAFB"
+#TARGET_GENE = "HAT1"
 TARGET_GENE = os.getenv("TARGET_GENE")
 if not TARGET_GENE:
     print("TARGET_GENE environment variable not set")
     sys.exit(1)
 
 PARENT_FOLDER = "/users/cn/caraiz/propr_new/"
-#INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
-INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/{TARGET_GENE}_gpu_results.csv.gz"  # update this
-OUTPUT_GENEWISE_PATH = f"{PARENT_FOLDER}results/propd_single/genewise_metrics/pert_{TARGET_GENE}_genewise_metrics.csv"
-TMP_MEMMAP_PATH = f"{PARENT_FOLDER}results/tmp/theta_by_gene.float64" # folder must exist
+INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
+#INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/{TARGET_GENE}_gpu_results.csv.gz"  # update this
+# See if the file exists
+if not os.path.isfile(INPUT_PAIRWISE_PATH):
+    print(f"Input file not found: {INPUT_PAIRWISE_PATH}")
+    INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
+    sys.exit(1)
+    # if not os.path.isfile(INPUT_PAIRWISE_PATH):
+    #     print(f"Input file not found: {INPUT_PAIRWISE_PATH}")
+    #     sys.exit(1)
+OUTPUT_GENEWISE_PATH = f"{PARENT_FOLDER}results/propd_single/genewise_metrics/with_connectivity/pert_{TARGET_GENE}_genewise_metrics_debugged.csv"
+job_id = os.getenv("SLURM_JOB_ID", os.getpid())
+TMP_MEMMAP_PATH = (
+    f"{PARENT_FOLDER}results/tmp/{TARGET_GENE}_theta_by_gene_{job_id}.float64"
+)
 ALL_GENE_NAMES_PATH = f"{PARENT_FOLDER}data/all_gene_names_18080.txt"
 
 # ------ Parameters -----
@@ -82,6 +93,7 @@ def first_pass_connectivity_only():
     """
     per_gene_count = np.zeros(NUMBER_OF_GENES, dtype=np.int64)
     per_gene_weighted_connectivity = np.zeros(NUMBER_OF_GENES, dtype=np.float64)
+    per_gene_connectivity = np.zeros(NUMBER_OF_GENES, dtype=np.float64)
 
     # Read the file in chunks (keep only necessary columns)
     reader = pd.read_csv(
@@ -114,6 +126,9 @@ def first_pass_connectivity_only():
             w = 1.0 - theta[sig] # Subset only significant pairs
             np.add.at(per_gene_weighted_connectivity, partner[sig], w)
             np.add.at(per_gene_weighted_connectivity, pair[sig], w)
+            
+            np.add.at(per_gene_connectivity, partner[sig], 1)
+            np.add.at(per_gene_connectivity, pair[sig], 1)
 
         print(f"Weighted connectivity pass: processed chunk with {len(chunk)} rows", flush=True)
     print("First pass complete", flush=True)
@@ -123,7 +138,7 @@ def first_pass_connectivity_only():
         bad = np.where(per_gene_count != PER_GENE_PAIR_COUNT)[0]
         raise RuntimeError(f"Count mismatch for {bad.size} genes")
 
-    return per_gene_weighted_connectivity
+    return per_gene_weighted_connectivity, per_gene_connectivity
 
 
 def prepare_memmap_and_offsets():
@@ -209,7 +224,7 @@ def compute_actual_counts(next_write_pos, slice_start):
 # -------------------------
 # Finalize exact statistics
 # -------------------------
-def finalize_stats(weighted_connectivity, slice_start):
+def finalize_stats(weighted_connectivity, connectivity,slice_start):
     """
     Finalize exact statistics
     """
@@ -245,12 +260,13 @@ def finalize_stats(weighted_connectivity, slice_start):
             "theta_mean": theta_mean,
             "theta_median": theta_median,
             "weighted_connectivity": weighted_connectivity,
+            "connectivity": connectivity,
         }
     )
     return out
 
 # --- replace your finalize_stats with this robust version ---
-def finalize_stats_robust(weighted_connectivity, slice_start, actual_counts):
+def finalize_stats_robust(weighted_connectivity, connectivity, slice_start, actual_counts):
     theta_mem = np.memmap(TMP_MEMMAP_PATH, dtype=np.float64, mode="r")
 
     theta_mean   = np.full(NUMBER_OF_GENES, np.nan, dtype=np.float64)
@@ -277,18 +293,19 @@ def finalize_stats_robust(weighted_connectivity, slice_start, actual_counts):
             theta_median[g] = (left + right) / 2.0
 
     # Coerce everything to clean 1D NumPy arrays and validate lengths
-    gene_index = np.arange(1, N + 1, dtype=np.int32)
+    gene_index = np.arange(1, NUMBER_OF_GENES + 1, dtype=np.int32)
     pair_count = np.asarray(actual_counts, dtype=np.int64).reshape(-1)
     wc         = np.asarray(weighted_connectivity, dtype=np.float64).reshape(-1)
+    c          = np.asarray(connectivity, dtype=np.float64).reshape(-1)
     tmn        = np.asarray(theta_mean, dtype=np.float64).reshape(-1)
     tmd        = np.asarray(theta_median, dtype=np.float64).reshape(-1)
 
-    lengths = [gene_index.size, pair_count.size, wc.size, tmn.size, tmd.size]
+    lengths = [gene_index.size, pair_count.size, wc.size, c.size, tmn.size, tmd.size]
     if len(set(lengths)) != 1:
         raise ValueError(
             f"All arrays must match in length. Shapes -> "
             f"gene_index:{gene_index.size}, pair_count:{pair_count.size}, "
-            f"weighted_connectivity:{wc.size}, theta_mean:{tmn.size}, theta_median:{tmd.size}"
+            f"weighted_connectivity:{wc.size}, connectivity:{c.size}, theta_mean:{tmn.size}, theta_median:{tmd.size}"
         )
 
     out = pd.DataFrame(
@@ -298,6 +315,7 @@ def finalize_stats_robust(weighted_connectivity, slice_start, actual_counts):
             "theta_mean": tmn,
             "theta_median": tmd,
             "weighted_connectivity": wc,
+            "connectivity": c,
         }
     )
     return out
@@ -312,7 +330,7 @@ def main():
     os.makedirs(os.path.dirname(TMP_MEMMAP_PATH), exist_ok=True)
 
     # 1) First pass: connectivity only
-    weighted_connectivity = first_pass_connectivity_only()
+    weighted_connectivity, connectivity = first_pass_connectivity_only()
     print("Computed weighted connectivity for all genes", flush=True)
     #print(f"shape of weighted_connectivity: {weighted_connectivity.shape}")
 
@@ -329,7 +347,7 @@ def main():
     print("Computed actual per-gene pair counts", flush=True)
 
     # 5) Finalize exact stats and write
-    result = finalize_stats_robust(weighted_connectivity, slice_start, actual_counts)
+    result = finalize_stats_robust(weighted_connectivity, connectivity, slice_start, actual_counts)
     # result.to_csv(OUTPUT_GENEWISE_PATH, index=False, compression="gzip")
     # print(f"Wrote per gene metrics to {OUTPUT_GENEWISE_PATH}")
 
