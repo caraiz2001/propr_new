@@ -48,17 +48,17 @@ if not TARGET_GENE:
     sys.exit(1)
 
 PARENT_FOLDER = "/users/cn/caraiz/propr_new/"
-INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
+INPUT_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/results_pairwise_alpha0/{TARGET_GENE}_gpu_results.csv.gz"
 #INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/{TARGET_GENE}_gpu_results.csv.gz"  # update this
 # See if the file exists
 if not os.path.isfile(INPUT_PAIRWISE_PATH):
     print(f"Input file not found: {INPUT_PAIRWISE_PATH}")
-    INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/results_pairwise/{TARGET_GENE}_gpu_results.csv.gz"
+    INPUT_PAIRWISE_PATH = f"{PARENT_FOLDER}results/results_pairwise_alpha0/{TARGET_GENE}_gpu_results.csv.gz"
     sys.exit(1)
     # if not os.path.isfile(INPUT_PAIRWISE_PATH):
     #     print(f"Input file not found: {INPUT_PAIRWISE_PATH}")
     #     sys.exit(1)
-OUTPUT_GENEWISE_PATH = f"{PARENT_FOLDER}results/propd_single/genewise_metrics/with_connectivity/pert_{TARGET_GENE}_genewise_metrics_debugged.csv"
+OUTPUT_GENEWISE_PATH = f"{PARENT_FOLDER}results/propd_single/genewise_metrics/alpha0/pert_{TARGET_GENE}_genewise_metrics_alpha0.csv"
 job_id = os.getenv("SLURM_JOB_ID", os.getpid())
 TMP_MEMMAP_PATH = (
     f"{PARENT_FOLDER}results/tmp/{TARGET_GENE}_theta_by_gene_{job_id}.float64"

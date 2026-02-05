@@ -19,10 +19,10 @@ if not TARGET_GENE:
     sys.exit(1)
 PROPD_COMBINED_PATH = f"/db/VCC/theta_combined/theta_summed_{TARGET_GENE}.csv.gz"
 WILCOXON_PATH = f"/users/cn/projects/VCC/de_results_per_gene/{TARGET_GENE}_de_genes.tsv"
-PROPD_SINGLE_PATH = f"/users/cn/caraiz/propr_new/results/propd_single/genewise_metrics/pert_{TARGET_GENE}_genewise_metrics.csv.gz"
+PROPD_SINGLE_PATH = f"/users/cn/caraiz/propr_new/results/propd_single/genewise_metrics/alpha0/pert_{TARGET_GENE}_genewise_metrics_alpha0.csv"
 # PROPD_PAIRWISE_PATH = f"/users/cn/caraiz/propr_new/results/{TARGET_GENE}_gpu_results.csv.gz"
 PROPD_COMBINED_MATRIX_PATH = f"/db/VCC/theta_combined/theta_{TARGET_GENE}.csv.gz"
-OUTPUT_DIR = f"/users/cn/caraiz/propr_new/results/propd_benchmark/{TARGET_GENE}/"
+OUTPUT_DIR = f"/users/cn/caraiz/propr_new/results/propd_benchmark/propd_benchmark_alpha0/{TARGET_GENE}/"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ----------------------------
@@ -167,7 +167,8 @@ def compute_theta_enrichment(theta_df: pd.DataFrame, ascending: bool = True):
 def main():
     propd_comb_de = pd.read_csv(PROPD_COMBINED_PATH, compression="gzip")
     wilcoxon_de = pd.read_csv(WILCOXON_PATH, sep="\t")
-    propd_single_de = pd.read_csv(PROPD_SINGLE_PATH, compression="gzip")
+    #propd_single_de = pd.read_csv(PROPD_SINGLE_PATH, compression="gzip")
+    propd_single_de = pd.read_csv(PROPD_SINGLE_PATH)
     propd_comb_matrix = pd.read_csv(PROPD_COMBINED_MATRIX_PATH, index_col=0, compression="gzip")
 
 
