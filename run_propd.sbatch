@@ -4,7 +4,7 @@
 #SBATCH --output=/users/cn/caraiz/propr_new/logs/propr_single%j.out  # stdout log (%j = job ID)
 #SBATCH --error=/users/cn/caraiz/propr_new/logs/propr_single%j.err   # stderr log
 #SBATCH --time=02:00:00                # max runtime (HH:MM:SS)
-#SBATCH --mem=500G                      # total memory
+#SBATCH --mem=200G                      # total memory
 #SBATCH --partition=gpu           # queue/partition name
 #SBATCH --gres=gpu:1g.20gb:1
 #SBATCH --cpus-per-task=80
@@ -21,7 +21,7 @@
 DRY_RUN=false
 
 GENES=(
-    KDM2B NDUFB6 
+    ACAT2
 )
 
 TOTAL_GENES=${#GENES[@]}

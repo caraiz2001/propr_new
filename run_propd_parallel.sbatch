@@ -10,17 +10,18 @@
 # logs per array task:
 #SBATCH --output=/users/cn/caraiz/propr_new/logs/%x_%A_%a.out
 #SBATCH --error=/users/cn/caraiz/propr_new/logs/%x_%A_%a.err
-#SBATCH --array=1-135%8   # adjust max parallel tasks with %N
+#SBATCH --array=1-150%10   # adjust max parallel tasks with %N
 
 set -euo pipefail
 
 # --- map array index -> gene name ---
-mapfile -t GENES < <(awk 'NF && $0 !~ /^#/' /users/cn/caraiz/propr_new/data/corrupted_genes.txt)
+mapfile -t GENES < <(awk 'NF && $0 !~ /^#/' /users/cn/caraiz/propr_new/data/genes.txt)
 idx=$(( SLURM_ARRAY_TASK_ID - 1 ))
 if (( idx < 0 || idx >= ${#GENES[@]} )); then
   echo "No gene for task $SLURM_ARRAY_TASK_ID"; exit 0
 fi
 export TARGET_GENE="${GENES[$idx]}"
+#export TARGET_GENE="CASP3"
 
 echo "$(date) task=$SLURM_ARRAY_TASK_ID host=$(hostname) gpu=$CUDA_VISIBLE_DEVICES gene=$TARGET_GENE"
 
