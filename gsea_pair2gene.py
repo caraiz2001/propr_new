@@ -37,9 +37,9 @@ if not TARGET_GENE:
     sys.exit(1)
 
 PARENT_DIR = "/users/cn/caraiz/propr_new/"
-INPUT_PAIRWISE_PATH = f"{PARENT_DIR}results/{TARGET_GENE}_gpu_results.csv.gz"
-OUTPUT_GSEA_PATH = f"{PARENT_DIR}results/gsea_pair2gene/{TARGET_GENE}_gsea_results.csv"
-OUTPUT_SORTED_PATH = f"{PARENT_DIR}results/tmp/{TARGET_GENE}_sorted.csv"
+INPUT_PAIRWISE_PATH = f"{PARENT_DIR}results/results_pairwise_alpha0/{TARGET_GENE}_gpu_results.csv.gz"
+OUTPUT_GSEA_PATH = f"{PARENT_DIR}results/gsea_pair2gene_alpha0/{TARGET_GENE}_gsea_results_alpha0.csv"
+OUTPUT_SORTED_PATH = f"{PARENT_DIR}results/tmp/{TARGET_GENE}_sorted.csv.gz"
 TMP_DIR = f"{PARENT_DIR}results/tmp/"
 os.makedirs(TMP_DIR, exist_ok=True)
 
@@ -64,7 +64,7 @@ def sort_csv_by_score(input_csv: Path, output_sorted_csv: Path):
     #     delimiter = "\t" if "\t" in header else ","
     #     sort_flag = "-t$'\\t'" if delimiter == "\t" else "-t,"
 
-    sort_flag = "-t,"  # assume comma for simplicity
+    #sort_flag = "-t,"  # assume comma for simplicity
 
     #tmpdir = tempfile.mkdtemp(prefix="pairgsea_")
     # Intermediate sorted file
@@ -73,17 +73,33 @@ def sort_csv_by_score(input_csv: Path, output_sorted_csv: Path):
 
     # Sort the file directly, skipping the header (first line) using process substitution
     # This avoids writing a new file for the body
-    sort_key = "-k3,3g"
-    sort_cmd = f"zcat {input_csv} | sort {sort_flag} {sort_key}"
+    #sort_key = "-k3,3g"
+    #sort_cmd = f"zcat {input_csv} | sort {sort_flag} {sort_key}"
 
-    # Write the sorted file
-    with open(output_sorted_csv, "wb") as out:
-        subprocess.run(sort_cmd, shell=True, stdout=out, check=True)
+    # # Write the sorted file
+    # with open(output_sorted_csv, "wb") as out:
+    #     subprocess.run(sort_cmd, shell=True, stdout=out, check=True)
+
+    threads = int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))
+
+    sort_cmd = (
+        f"pigz -dc -p {threads} {input_csv} | "
+        f"LC_ALL=C sort -S 40G -T {TMP_DIR} -t',' -k3,3g | "
+        f"pigz -c -p {threads} > {output_sorted_csv}"
+    )
+    subprocess.run(sort_cmd, shell=True, check=True)
 
     # # Reattach header (extract header using zcat and head)
     # with open(output_sorted_csv, "wb") as out:
     #     subprocess.run(f"zcat {input_csv} | head -n 1", shell=True, stdout=out, check=True)
     #     subprocess.run(["cat", str(tmp_sorted)], stdout=out, check=True)
+
+def open_text_maybe_gzip(path):
+    path = str(path)
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", newline="")
+    return open(path, "rt", newline="")
+
 
 # Function to compute enrichment score for each gene
 def compute_es_stream(sorted_csv: Path,
@@ -120,7 +136,7 @@ def compute_es_stream(sorted_csv: Path,
     minv = np.zeros(G, dtype=np.float64) # min ES value (negative)
 
     # Detect delimiter from header
-    with open(sorted_csv, newline="") as f:
+    with open_text_maybe_gzip(sorted_csv) as f:
         header = f.readline()
         delimiter = "\t" if "\t" in header else ","
         f.seek(0)
@@ -273,8 +289,15 @@ def main():
     G = len(gene_id)
     print(f"Found {G} genes; {N} pairs (rows).", file=sys.stderr)
 
-    sort_csv_by_score(INPUT_PAIRWISE_PATH, OUTPUT_SORTED_PATH)
-    print("Sorting done.", file=sys.stderr)
+    # sort_csv_by_score(INPUT_PAIRWISE_PATH, OUTPUT_SORTED_PATH)
+    # print("Sorting done.", file=sys.stderr)
+    try:
+        sort_csv_by_score(INPUT_PAIRWISE_PATH, OUTPUT_SORTED_PATH)
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Sorting failed (exit code {e.returncode}). Command was:\n{e.cmd}", file=sys.stderr)
+        raise  # re-raise so the job fails
+    else:
+        print("Sorting done.", file=sys.stderr)
 
     print("Computing enrichment scores (streaming pass)...", file=sys.stderr)
     es, pos, neg = compute_es_stream(OUTPUT_SORTED_PATH, gene_id, N)

@@ -11,7 +11,7 @@ if (target_gene == "") {
 }
 
 adata_path <- "/users/cn/projects/VCC/vcc_data/adata_Training.h5ad"
-out_dir    <- "/users/cn/caraiz/propr_new/results"
+out_dir    <- "/users/cn/caraiz/propr_new/results/results_pairwise_alpha0"
 
 
 adata <- read_h5ad(adata_path)
@@ -38,8 +38,8 @@ grp <- factor(
 )
 
 #pd <- propd(counts_sub, grp, alpha = 0.5) BEFORE
-pd <- propd(counts_sub, grp, weighted = FALSE, alpha = 0.5)
-
+#pd <- propd(counts_sub, grp, weighted = FALSE, alpha = 0.5) # with weighted OFF
+pd <- propd(counts_sub, grp, weighted = FALSE)
 cat("Propd object created. Running updateF...\n")
 # pd <- propd(counts_sub, grp)
 pd <- updateF(pd)
@@ -56,10 +56,14 @@ cat("Done:", target_gene, "\n")
 #   file.path(out_dir, paste0(target_gene, "_gpu_results.csv.gz")),
 #   compress = "gzip")
 
+# Filter for the columns of interest: Partner, Pair, theta, FDR
+results_small <- pd@results[, c("Partner", "Pair", "theta", "FDR")]
+
 
 out_gz <- file.path(out_dir, paste0(target_gene, "_gpu_results.csv.gz"))
 con <- gzfile(out_gz, compression = 6)  # leave it CLOSED
-write.csv(pd@results, con, row.names = FALSE)  # opens & closes internally
+# write.csv(pd@results, con, row.names = FALSE)  # opens & closes internally
+write.csv(results_small, con, row.names = FALSE)  # opens & closes internally
 # no close(con) here
 
 

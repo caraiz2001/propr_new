@@ -1,18 +1,18 @@
 #!/bin/bash
 #SBATCH --job-name=pair2gene
-#SBATCH --output=/users/cn/caraiz/VCC/logs/%x_%A_%a.out
-#SBATCH --error=/users/cn/caraiz/VCC/logs/%x_%A_%a.err
-#SBATCH --time=00:45:00
+#SBATCH --output=/users/cn/caraiz/propr_new/logs/%x_%A_%a.out
+#SBATCH --error=/users/cn/caraiz/propr_new/logs/%x_%A_%a.err
+#SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=10G
 #SBATCH --partition=genoa64           # queue/partition name
-#SBATCH --array=0-1   # adjust max parallel tasks with %N
+#SBATCH --array=1-50%10   # adjust max parallel tasks with %N
 
 
 set -euo pipefail
 
 # --- map array index -> gene name ---
-mapfile -t GENES < <(awk 'NF && $0 !~ /^#/' /users/cn/caraiz/propr_new/data/missing_genes.txt)
+mapfile -t GENES < <(awk 'NF && $0 !~ /^#/' /users/cn/caraiz/propr_new/results/genes_not_analysed.txt)
 #mapfile -t GENES < <(awk 'NF && $0 !~ /^#/' /db/VCC/vcc_data/validation_genes.txt)
 idx=$(( SLURM_ARRAY_TASK_ID - 1 ))
 if (( idx < 0 || idx >= ${#GENES[@]} )); then
